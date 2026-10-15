@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Tray icon with Steam status options and the usual Windows tray items."""
+import fcntl
+import os
 import re
 import subprocess
 import sys
@@ -29,6 +31,7 @@ def current_status():
         return None
     m = re.search(r'ePersonaState\\":(\d+)', text)
     return PERSONA_STATES.get(int(m.group(1))) if m else None
+
 
 GROUPS = [
     [
@@ -65,7 +68,22 @@ def steam(*args):
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
+def already_running():
+    """Take a per-user lock; True if another instance holds it."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    lock = open(Path(runtime) / "steam-status-tray.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    already_running.lock = lock  # held for the life of the process
+    return False
+
+
 def main():
+    if already_running():
+        sys.exit(0)
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     # Keep running while the icon is hidden (Steam closed)
@@ -109,6 +127,7 @@ def main():
     tray.activated.connect(
         lambda reason: steam("steam://open/friends")
         if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+
     # Only show the icon while Steam is running
     def sync_visibility():
         tray.setVisible(steam_running())

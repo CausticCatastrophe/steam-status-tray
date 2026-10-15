@@ -32,6 +32,9 @@ menu, even if you changed your status inside Steam.
 
 Left-click the icon to open your Friends list.
 
+The icon only appears while Steam is running. It shows up when you
+start Steam and goes away when you exit Steam.
+
 ---
 
 ## Install
@@ -65,6 +68,9 @@ makepkg -si
 Open the app launcher, search for **Steam Status Tray**, and click it.
 (Or just log out and back in.)
 
+**Nothing shows up?** That's normal if Steam is closed. Start Steam and
+the icon will appear.
+
 From now on, it starts by itself every time you log in.
 
 ### 4. (Optional) Hide Steam's own tray icon
@@ -95,6 +101,8 @@ in the same settings page.
 
 ## Notes
 
+- **Quit Tray Icon** closes it until you log in again, or until you start
+  it from the app launcher.
 - **Native Steam only.** The Flatpak version of Steam isn't supported.
 - **GNOME** doesn't show tray icons by default. Install the
   *AppIndicator and KStatusNotifierItem Support* extension first.
