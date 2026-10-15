@@ -70,8 +70,16 @@ def steam(*args):
 
 def already_running():
     """Take a per-user lock; True if another instance holds it."""
-    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-    lock = open(Path(runtime) / "steam-status-tray.lock", "w")
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    lock_dir = Path(runtime) if runtime else Path.home() / ".cache"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # No O_TRUNC, and never follow a symlink planted at the lock path
+        fd = os.open(lock_dir / "steam-status-tray.lock",
+                     os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return False  # can't lock; run anyway rather than refuse to start
+    lock = os.fdopen(fd, "r+")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -119,7 +127,6 @@ def main():
     menu.addSeparator()
     menu.addAction("Exit Steam").triggered.connect(
         lambda: steam("-shutdown"))
-    menu.addAction("Quit Tray Icon").triggered.connect(app.quit)
 
     tray = QSystemTrayIcon(QIcon.fromTheme("steam"))
     tray.setToolTip("Steam Status")

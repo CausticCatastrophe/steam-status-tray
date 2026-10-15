@@ -24,7 +24,6 @@ Settings
 Big Picture
 ─────────────
 Exit Steam
-Quit Tray Icon
 ```
 
 The dot shows your current status. It updates every time you open the
@@ -101,8 +100,6 @@ in the same settings page.
 
 ## Notes
 
-- **Quit Tray Icon** closes it until you log in again, or until you start
-  it from the app launcher.
 - **Native Steam only.** The Flatpak version of Steam isn't supported.
 - **GNOME** doesn't show tray icons by default. Install the
   *AppIndicator and KStatusNotifierItem Support* extension first.
