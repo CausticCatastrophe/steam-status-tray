@@ -177,16 +177,30 @@ def main():
     status_group = QActionGroup(menu)
     status_group.setExclusive(True)
     status_actions = {}
+    # Steam doesn't save "Offline" to localconfig.vdf (the stored value
+    # stays at the last online state), so remember it ourselves: when
+    # Offline is picked here, show Offline until the stored value changes.
+    offline = {"on": False, "stored": None}
+
+    def choose(name):
+        offline["on"] = name == "Offline"
+        offline["stored"] = current_status()
+        steam(f"steam://friends/status/{name.lower()}")
+
     for name in STATUSES:
         act = QAction(name, menu, checkable=True)
-        act.triggered.connect(
-            lambda _, s=name.lower(): steam(f"steam://friends/status/{s}"))
+        act.triggered.connect(lambda _, n=name: choose(n))
         status_group.addAction(act)
         menu.addAction(act)
         status_actions[name] = act
 
     def sync_status():
         name = current_status()
+        if offline["on"]:
+            if name == offline["stored"]:
+                name = "Offline"
+            else:
+                offline["on"] = False  # status changed elsewhere
         if name in status_actions:
             status_actions[name].setChecked(True)
 
@@ -212,7 +226,10 @@ def main():
 
     # Only show the icon while Steam is running
     def sync_visibility():
-        tray.setVisible(steam_running())
+        running = steam_running()
+        if not running:
+            offline["on"] = False  # Steam signs back in on next start
+        tray.setVisible(running)
 
     sync_visibility()
     timer = QTimer()
