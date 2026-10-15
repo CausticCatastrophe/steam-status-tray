@@ -3,8 +3,10 @@
 import fcntl
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
@@ -68,8 +70,12 @@ def steam(*args):
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-def already_running():
-    """Take a per-user lock; True if another instance holds it."""
+def take_over():
+    """Take the per-user lock, replacing any older running instance.
+
+    The lock file holds the owner's PID. A newer launch (e.g. after an
+    update) stops the old instance so the new version takes its place.
+    """
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     lock_dir = Path(runtime) if runtime else Path.home() / ".cache"
     lock_dir.mkdir(parents=True, exist_ok=True)
@@ -78,19 +84,45 @@ def already_running():
         fd = os.open(lock_dir / "steam-status-tray.lock",
                      os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     except OSError:
-        return False  # can't lock; run anyway rather than refuse to start
+        return  # can't lock; run anyway rather than refuse to start
     lock = os.fdopen(fd, "r+")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        return True
-    already_running.lock = lock  # held for the life of the process
-    return False
+        stop_old_instance(lock)
+        for _ in range(50):  # wait up to 5s for it to exit
+            time.sleep(0.1)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                continue
+        else:
+            sys.exit(0)  # old instance won't go; leave it running
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+    take_over.lock = lock  # held for the life of the process
+
+
+def stop_old_instance(lock):
+    """SIGTERM the PID in the lock file, if it really is this program."""
+    lock.seek(0)
+    try:
+        pid = int(lock.read().strip())
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (ValueError, OSError):
+        return
+    if pid != os.getpid() and b"steam-status-tray" in cmdline:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
 
 
 def main():
-    if already_running():
-        sys.exit(0)
+    take_over()
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
