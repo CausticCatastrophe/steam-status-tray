@@ -6,6 +6,7 @@ arch=('any')
 url="https://github.com/CausticCatastrophe/steam-status-tray"
 license=('MIT')
 depends=('python' 'python-pyqt6' 'steam')
+install=steam-status-tray.install
 source=('steam-status-tray' 'steam-status-tray.desktop' 'LICENSE')
 sha256sums=('SKIP' 'SKIP' 'SKIP')
 
