@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Steam Status Tray
+Comment=Tray icon with Steam friends status and quick links
+Icon=steam
+Exec=steam-status-tray
+Terminal=false
+Categories=Game;
+X-GNOME-Autostart-enabled=true
