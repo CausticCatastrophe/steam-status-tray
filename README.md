@@ -56,25 +56,27 @@ rm -rf steam-status-tray
 git clone https://github.com/CausticCatastrophe/steam-status-tray
 cd steam-status-tray
 makepkg -si
+setsid -f steam-status-tray >/dev/null 2>&1
 cd ~
 rm -rf steam-status-tray
 ```
 
-The last two lines delete the downloaded files once it's installed.
+The `setsid` line starts the tray right away. The last two lines delete
+the downloaded files once it's installed.
 
 - It will ask for **your password**. Typing it won't show anything on
   screen. That's normal. Type it and press Enter.
 - If it asks **"Proceed with installation? [Y/n]"**, press **Enter**.
 
-### 3. Start it
+### 3. Start Steam
 
-Open the app launcher, search for **Steam Status Tray**, and click it.
-(Or just log out and back in.)
+That's it. The tray is already running, so the icon shows up as soon
+as Steam is open. From now on it also starts by itself every time you
+log in.
 
-**Nothing shows up?** That's normal if Steam is closed. Start Steam and
-the icon will appear.
-
-From now on, it starts by itself every time you log in.
+**Need to start it by hand?** Press the **Windows key** on your
+keyboard (or click the menu button in the bottom-left corner of the
+screen), type **Steam Status Tray**, and press **Enter**.
 
 ### 4. (Optional) Hide Steam's own tray icon
 

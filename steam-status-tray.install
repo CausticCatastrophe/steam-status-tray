@@ -2,8 +2,8 @@ post_install() {
   echo
   echo "  Steam Status Tray is installed."
   echo
-  echo "  To start it now: open the app launcher and click"
-  echo "  'Steam Status Tray' (or just log out and back in)."
+  echo "  To start it now: press the Windows key, type"
+  echo "  'Steam Status Tray' and press Enter (or log out and in)."
   echo
   echo "  After that it starts on its own at every login, and"
   echo "  the icon shows whenever Steam is running."
