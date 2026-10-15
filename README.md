@@ -43,7 +43,8 @@ Arch-based systems. You need the normal (non-Flatpak) Steam.
 
 ### 1. Open a terminal
 
-Press the app launcher, type **Konsole** (or **Terminal**), and open it.
+Press the **Windows key** on your keyboard, type **Konsole** (or
+**Terminal**), and press **Enter**.
 
 ### 2. Copy and paste these lines
 
@@ -91,7 +92,8 @@ Otherwise you'll have two Steam icons. On KDE Plasma:
 
 ## Update
 
-Run the same lines from step 2 again.
+Run the same lines from step 2 again, then log out and back in so the
+new version starts.
 
 ## Uninstall
 
