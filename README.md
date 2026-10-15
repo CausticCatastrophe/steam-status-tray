@@ -102,6 +102,9 @@ This also closes the tray icon, and Steam's own tray icon comes back.
   *AppIndicator and KStatusNotifierItem Support* extension first.
 - The status dot reads an undocumented Steam setting. If a Steam update
   breaks it, changing status from the menu will still work.
+- Steam doesn't save **Offline** anywhere the tray can read, so the dot
+  only shows Offline when you pick it from this menu. Going offline from
+  Steam's own friends window won't move the dot.
 
 ## License
 
