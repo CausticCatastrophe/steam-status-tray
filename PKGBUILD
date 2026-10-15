@@ -1,5 +1,5 @@
 pkgname=steam-status-tray
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="Tray icon with Steam friends status (Online/Away/Invisible/Offline) and quick links"
 arch=('any')

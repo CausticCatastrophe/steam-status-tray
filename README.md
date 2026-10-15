@@ -75,14 +75,8 @@ That's it. The tray is already running, so the icon shows up as soon
 as Steam is open. From now on it also starts by itself every time you
 log in.
 
-### 4. (Optional) Hide Steam's own tray icon
-
-Otherwise you'll have two Steam icons. On KDE Plasma:
-
-1. Right-click the small **▲** arrow in the system tray
-2. Click **Configure System Tray…**
-3. Open **Entries**
-4. Find **steam** and set it to **Always hidden**
+On KDE Plasma, Steam's own tray icon is hidden automatically while this
+one runs, so you only see one Steam icon.
 
 ---
 
@@ -97,10 +91,7 @@ one right away.
 sudo pacman -R steam-status-tray
 ```
 
-This also closes the tray icon if it's running.
-
-If you hid Steam's own tray icon, set it back to **Shown when relevant**
-in the same settings page.
+This also closes the tray icon, and Steam's own tray icon comes back.
 
 ---
 
