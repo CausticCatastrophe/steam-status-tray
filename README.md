@@ -51,12 +51,16 @@ Paste them into the terminal and press **Enter**:
 
 ```
 sudo pacman -S --needed git base-devel
-cd /tmp
+cd ~
 rm -rf steam-status-tray
 git clone https://github.com/CausticCatastrophe/steam-status-tray
 cd steam-status-tray
 makepkg -si
+cd ~
+rm -rf steam-status-tray
 ```
+
+The last two lines delete the downloaded files once it's installed.
 
 - It will ask for **your password**. Typing it won't show anything on
   screen. That's normal. Type it and press Enter.
