@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Tray icon with Steam status options and the usual Windows tray items."""
+import ctypes
+import ctypes.util
 import fcntl
+import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtDBus import QDBusInterface
-from PyQt6.QtGui import QAction, QActionGroup, QIcon
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 STATUSES = ["Online", "Away", "Invisible", "Offline"]
@@ -100,6 +104,213 @@ def set_steam_icon_hidden(hide):
     if shell.isValid():
         shell.call("evaluateScript",
                    STEAM_ICON_SCRIPT % ("true" if hide else "false"))
+
+
+# --- Unread chats ---------------------------------------------------------
+#
+# Steam on Linux has a bug (steam-for-linux#10722): when a message arrives
+# and no chat is open, Steam creates the chat window but never shows it.
+# Steam logs the window's creation in webhelper.txt, and the hidden X11
+# window's title is the friend's name. We list those as unread chats, and
+# opening one maps the window and asks KWin to un-minimize and focus it.
+
+WEBHELPER_LOG = Path.home() / ".local/share/Steam/logs/webhelper.txt"
+CHAT_CREATED = re.compile(r"chat_ChatWindow_(\d+)_uid\d+.*?: Created window:"
+                          r".*System window: (0x[0-9a-fA-F]+)")
+CHAT_HIDDEN = re.compile(r"chat_ChatWindow_(\d+)_uid\d+.*?: WasHidden ([01])")
+CHAT_CLOSED = re.compile(r"chat_ChatWindow_(\d+)_uid\d+.*?: "
+                         r"Applying safe browser shutdown")
+# A chat the user opens themselves is briefly hidden too; only count it
+# as unread once it has stayed hidden this long.
+UNREAD_AFTER = 1.5
+
+KWIN_RAISE_SCRIPT = """
+const title = %s;
+for (const w of workspace.windowList()) {
+  if (w.resourceClass === "steam" && w.caption === title) {
+    w.minimized = false;
+    workspace.activeWindow = w;
+  }
+}
+"""
+
+
+class X11:
+    """Just enough of libX11 (via ctypes) to read a title and map a window.
+
+    Steam runs under XWayland even in a Wayland session, so its windows
+    are X11 windows. Any X error (e.g. the window is gone) is ignored.
+    """
+
+    def __init__(self):
+        self.d = None
+        lib = ctypes.util.find_library("X11")
+        if not lib or not os.environ.get("DISPLAY"):
+            return
+        x = self.x = ctypes.cdll.LoadLibrary(lib)
+        vp, ul = ctypes.c_void_p, ctypes.c_ulong
+        x.XOpenDisplay.restype = vp
+        x.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        handler_t = ctypes.CFUNCTYPE(ctypes.c_int, vp, vp)
+        self._on_error = handler_t(lambda d, e: 0)  # keep a reference
+        x.XSetErrorHandler.argtypes = [handler_t]
+        x.XSetErrorHandler(self._on_error)
+        x.XInternAtom.restype = ul
+        x.XInternAtom.argtypes = [vp, ctypes.c_char_p, ctypes.c_int]
+        x.XGetWindowProperty.argtypes = [
+            vp, ul, ul, ctypes.c_long, ctypes.c_long, ctypes.c_int, ul,
+            ctypes.POINTER(ul), ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ul), ctypes.POINTER(ul),
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+        x.XFree.argtypes = [vp]
+        x.XMapRaised.argtypes = [vp, ul]
+        x.XFlush.argtypes = [vp]
+        self.d = x.XOpenDisplay(None)
+        if self.d:
+            self.net_wm_name = x.XInternAtom(self.d, b"_NET_WM_NAME", 0)
+
+    def title(self, wid):
+        """The window's _NET_WM_NAME, or None if it has none or is gone."""
+        if not self.d:
+            return None
+        ul = ctypes.c_ulong
+        a_type, a_fmt = ul(), ctypes.c_int()
+        n, after = ul(), ul()
+        data = ctypes.POINTER(ctypes.c_ubyte)()
+        ok = self.x.XGetWindowProperty(
+            self.d, wid, self.net_wm_name, 0, 1024, 0, 0,
+            ctypes.byref(a_type), ctypes.byref(a_fmt), ctypes.byref(n),
+            ctypes.byref(after), ctypes.byref(data))
+        if ok != 0 or not data:
+            return None
+        try:
+            return bytes(data[:n.value]).decode("utf-8", "replace") or None
+        finally:
+            self.x.XFree(data)
+
+    def map_raised(self, wid):
+        if self.d:
+            self.x.XMapRaised(self.d, wid)
+            self.x.XFlush(self.d)
+
+
+def log_time(line):
+    """A log line's '[YYYY-MM-DD HH:MM:SS]' stamp as epoch seconds."""
+    try:
+        return time.mktime(time.strptime(line[1:20], "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return time.time()
+
+
+class ChatWatcher:
+    """Follows webhelper.txt and tracks chat windows Steam left hidden."""
+
+    def __init__(self):
+        self.x11 = X11()
+        self.windows = {}  # ChatWindow number -> {"wid", "hidden_since"}
+        self.inode = None
+        self.offset = 0
+        self.partial = ""
+
+    @property
+    def enabled(self):
+        return self.x11.d is not None
+
+    def poll(self):
+        if not self.enabled:
+            return
+        try:
+            st = WEBHELPER_LOG.stat()
+        except OSError:
+            return
+        if st.st_ino != self.inode or st.st_size < self.offset:
+            # First read, or a new/rotated log (Steam restarted). Read it
+            # all: chats left hidden earlier are still unread, and windows
+            # that no longer exist drop out when their title can't be read.
+            self.inode, self.offset, self.partial = st.st_ino, 0, ""
+            self.windows.clear()
+        if st.st_size == self.offset:
+            return
+        with open(WEBHELPER_LOG, "rb") as f:
+            f.seek(self.offset)
+            chunk = f.read()
+        self.offset += len(chunk)
+        lines = (self.partial + chunk.decode("utf-8", "replace")).split("\n")
+        self.partial = lines.pop()
+        for line in lines:
+            self._handle(line)
+
+    def _handle(self, line):
+        if m := CHAT_CREATED.search(line):
+            self.windows[m[1]] = {"wid": int(m[2], 16), "hidden_since": None}
+        elif m := CHAT_HIDDEN.search(line):
+            if m[1] in self.windows:
+                self.windows[m[1]]["hidden_since"] = (
+                    log_time(line) if m[2] == "1" else None)
+        elif m := CHAT_CLOSED.search(line):
+            self.windows.pop(m[1], None)
+
+    def unread(self):
+        """[(friend name, window id)] for chats Steam left hidden."""
+        now, out = time.time(), []
+        for key, w in list(self.windows.items()):
+            since = w["hidden_since"]
+            if since is None or now - since < UNREAD_AFTER:
+                continue
+            name = self.x11.title(w["wid"])
+            if name is None:  # window is gone
+                self.windows.pop(key, None)
+                continue
+            out.append((name, w["wid"]))
+        return out
+
+    def open(self, name, wid):
+        """Show a hidden chat window and bring it to the front."""
+        for w in self.windows.values():
+            if w["wid"] == wid:
+                w["hidden_since"] = None
+        self.x11.map_raised(wid)
+        # KWin needs a moment to start managing the newly mapped window
+        QTimer.singleShot(300, lambda: kwin_run(
+            KWIN_RAISE_SCRIPT % json.dumps(name)))
+
+    def clear(self):
+        self.windows.clear()
+
+
+def kwin_run(source):
+    """Run a one-off KWin script (KWin loads scripts from a file)."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or str(Path.home() / ".cache")
+    fd, path = tempfile.mkstemp(prefix="steam-status-tray-", suffix=".js",
+                                dir=runtime)
+    with os.fdopen(fd, "w") as f:
+        f.write(source)
+    name = Path(path).stem
+    scripting = QDBusInterface("org.kde.KWin", "/Scripting",
+                               "org.kde.kwin.Scripting")
+    reply = scripting.call("loadScript", path, name)
+    args = reply.arguments()
+    if args and isinstance(args[0], int) and args[0] >= 0:
+        QDBusInterface("org.kde.KWin", f"/Scripting/Script{args[0]}",
+                       "org.kde.kwin.Script").call("run")
+
+    def cleanup():
+        scripting.call("unloadScript", name)
+        Path(path).unlink(missing_ok=True)
+
+    QTimer.singleShot(2000, cleanup)
+
+
+def with_badge(icon):
+    """The icon with a red unread dot in the corner."""
+    pm = icon.pixmap(64, 64)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QColor("white"))
+    painter.setBrush(QColor("#e0302f"))
+    painter.drawEllipse(36, 0, 27, 27)
+    painter.end()
+    return QIcon(pm)
 
 
 def take_over():
@@ -217,18 +428,68 @@ def main():
     menu.addAction("Exit Steam").triggered.connect(
         lambda: steam("-shutdown"))
 
-    tray = QSystemTrayIcon(QIcon.fromTheme("steam"))
+    plain_icon = QIcon.fromTheme("steam")
+    badge_icon = with_badge(plain_icon)
+    tray = QSystemTrayIcon(plain_icon)
     tray.setToolTip("Steam Status")
     tray.setContextMenu(menu)
-    tray.activated.connect(
-        lambda reason: steam("steam://open/friends")
-        if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+
+    # Unread chats: listed at the top of the menu, badge on the icon
+    chats = ChatWatcher()
+    chat_actions = []
+    first_status = status_actions[STATUSES[0]]
+    shown = {"unread": None}
+
+    def sync_chats():
+        chats.poll()
+        unread = chats.unread()
+        key = [name for name, _ in unread]
+        if key == shown["unread"]:
+            return
+        shown["unread"] = key
+        for act in chat_actions:
+            menu.removeAction(act)
+        chat_actions.clear()
+        for name, wid in unread:
+            act = QAction(f"💬 {name}", menu)
+            act.triggered.connect(
+                lambda _, n=name, w=wid: open_chat(n, w))
+            chat_actions.append(act)
+        if chat_actions:
+            sep = QAction(menu)
+            sep.setSeparator(True)
+            chat_actions.append(sep)
+        menu.insertActions(first_status, chat_actions)
+        tray.setIcon(badge_icon if unread else plain_icon)
+        tray.setToolTip(f"Steam Status — {len(unread)} unread chat"
+                        f"{'' if len(unread) == 1 else 's'}"
+                        if unread else "Steam Status")
+
+    def open_chat(name, wid):
+        chats.open(name, wid)
+        sync_chats()
+
+    def on_click(reason):
+        if reason != QSystemTrayIcon.ActivationReason.Trigger:
+            return
+        unread = chats.unread()
+        if unread:
+            open_chat(*unread[0])
+        else:
+            steam("steam://open/friends")
+
+    tray.activated.connect(on_click)
+    menu.aboutToShow.connect(sync_chats)
+    chat_timer = QTimer()
+    chat_timer.timeout.connect(sync_chats)
+    chat_timer.start(1000)
 
     # Only show the icon while Steam is running
     def sync_visibility():
         running = steam_running()
         if not running:
             offline["on"] = False  # Steam signs back in on next start
+            chats.clear()
         tray.setVisible(running)
 
     sync_visibility()
