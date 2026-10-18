@@ -15,6 +15,8 @@ also fixes missed chat messages (see below).
 ○ Invisible
 ○ Offline
 ─────────────
+🎮 Your 5 most recently played games
+─────────────
 Store
 Library
 Community
@@ -31,6 +33,9 @@ Exit Steam
 
 The dot shows your current status. It updates every time you open the
 menu, even if you changed your status inside Steam.
+
+The recently played games come with their icons, just like on Windows.
+Click one to launch it.
 
 Left-click the icon to open your Friends list.
 

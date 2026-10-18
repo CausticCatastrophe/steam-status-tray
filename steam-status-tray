@@ -40,6 +40,127 @@ def current_status():
     return PERSONA_STATES.get(int(m.group(1))) if m else None
 
 
+def parse_vdf(text):
+    """Parse Valve's text KeyValues format into nested dicts (keys
+    lowercased). Good enough for localconfig.vdf."""
+    tokens = re.findall(r'"((?:[^"\\]|\\.)*)"|([{}])', text)
+    root, stack, key = {}, [], None
+    node = root
+    for quoted, brace in tokens:
+        if brace == "{":
+            child = {}
+            node[key] = child
+            stack.append(node)
+            node, key = child, None
+        elif brace == "}":
+            node = stack.pop() if stack else root
+            key = None
+        elif key is None:
+            key = quoted.lower()
+        else:
+            node[key] = quoted
+            key = None
+    return root
+
+
+# --- Recently played games -------------------------------------------------
+#
+# Steam's own tray menu lists the 5 most recently played games. Its Linux
+# menu (D-Bus, still running while its icon is hidden) gives the names in
+# the user's language; localconfig.vdf gives app IDs by LastPlayed, in the
+# same order. Icons are Steam's cached 32x32 game icons.
+
+LIBRARY_CACHE = Path.home() / ".local/share/Steam/appcache/librarycache"
+STEAM_SNI_PATH = "/org/ayatana/NotificationItem/steam"
+
+
+def busctl_json(*args):
+    try:
+        out = subprocess.run(["busctl", "--user", "--json=short", *args],
+                             capture_output=True, text=True, timeout=2)
+        return json.loads(out.stdout) if out.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def steam_menu_games():
+    """[(dbusmenu item id, label)] for the games in Steam's own tray menu,
+    plus the D-Bus service name, or ([], None) if it can't be read."""
+    items = busctl_json(
+        "get-property", "org.kde.StatusNotifierWatcher",
+        "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
+        "RegisteredStatusNotifierItems")
+    service = next((s.split("/", 1)[0] for s in (items or {}).get("data", [])
+                    if s.endswith(STEAM_SNI_PATH)), None)
+    if not service:
+        return [], None
+    layout = busctl_json("call", service, STEAM_SNI_PATH + "/Menu",
+                         "com.canonical.dbusmenu", "GetLayout", "iias",
+                         "0", "--", "-1", "0")
+    games = []
+    try:
+        for child in layout["data"][1][2]:
+            item_id, props, _ = child["data"]
+            props = {k: v["data"] for k, v in props.items()}
+            if props.get("type") == "separator":
+                break  # games are the first group
+            if props.get("label"):
+                games.append((item_id, props["label"]))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return [], None
+    return games, service
+
+
+def recent_app_ids():
+    """App IDs from localconfig.vdf, most recently played first."""
+    configs = list(USERDATA.glob("*/config/localconfig.vdf"))
+    if not configs:
+        return []
+    newest = max(configs, key=lambda p: p.stat().st_mtime)
+    try:
+        vdf = parse_vdf(newest.read_text(errors="ignore"))
+        apps = (vdf["userlocalconfigstore"]["software"]["valve"]
+                ["steam"]["apps"])
+    except (OSError, KeyError, TypeError):
+        return []
+    played = [(int(a.get("lastplayed", 0)), appid)
+              for appid, a in apps.items()
+              if isinstance(a, dict) and appid.isdigit()]
+    return [appid for t, appid in sorted(played, reverse=True) if t > 0]
+
+
+def game_icon(appid):
+    """Steam's cached 32x32 icon for a game (a <sha1>.jpg), if any."""
+    folder = LIBRARY_CACHE / appid
+    try:
+        icons = [p for p in folder.iterdir()
+                 if re.fullmatch(r"[0-9a-f]{40}\.jpg", p.name)]
+    except OSError:
+        return QIcon()
+    return QIcon(str(min(icons, key=lambda p: p.stat().st_size))) \
+        if icons else QIcon()
+
+
+def recent_games():
+    """[(label, icon, launch)] matching Steam's own recent-games list."""
+    menu_games, service = steam_menu_games()
+    if not menu_games:
+        return []
+    ids = recent_app_ids()[:len(menu_games)]
+    if len(ids) == len(menu_games):
+        return [(label, game_icon(appid),
+                 lambda a=appid: steam(f"steam://rungameid/{a}"))
+                for (_, label), appid in zip(menu_games, ids)]
+    # Lists don't line up: keep the names, launch through Steam's own menu
+    return [(label, QIcon(),
+             lambda i=item_id: subprocess.Popen(
+                 ["busctl", "--user", "call", service,
+                  STEAM_SNI_PATH + "/Menu", "com.canonical.dbusmenu",
+                  "Event", "isvu", str(i), "clicked", "s", "", "0"],
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            for item_id, label in menu_games]
+
+
 GROUPS = [
     [
         ("Store", "steam://store"),
@@ -418,11 +539,13 @@ def main():
     sync_status()
     menu.aboutToShow.connect(sync_status)
 
+    first_link = None
     for group in GROUPS:
         menu.addSeparator()
         for name, url in group:
-            menu.addAction(name).triggered.connect(
-                lambda _, u=url: steam(u))
+            act = menu.addAction(name)
+            act.triggered.connect(lambda _, u=url: steam(u))
+            first_link = first_link or act
 
     menu.addSeparator()
     menu.addAction("Exit Steam").triggered.connect(
@@ -434,10 +557,33 @@ def main():
     tray.setToolTip("Steam Status")
     tray.setContextMenu(menu)
 
+    first_status = status_actions[STATUSES[0]]
+
+    def separator():
+        sep = QAction(menu)
+        sep.setSeparator(True)
+        return sep
+
+    # Recently played games, between the statuses and the links
+    game_actions = []
+
+    def sync_games():
+        for act in game_actions:
+            menu.removeAction(act)
+        game_actions.clear()
+        for label, icon, launch in recent_games():
+            act = QAction(icon, label, menu)
+            act.triggered.connect(lambda _, f=launch: f())
+            game_actions.append(act)
+        if game_actions:
+            game_actions.append(separator())
+        menu.insertActions(first_link, game_actions)
+
+    menu.aboutToShow.connect(sync_games)
+
     # Unread chats: listed at the top of the menu, badge on the icon
     chats = ChatWatcher()
     chat_actions = []
-    first_status = status_actions[STATUSES[0]]
     shown = {"unread": None}
 
     def sync_chats():
@@ -456,10 +602,8 @@ def main():
                 lambda _, n=name, w=wid: open_chat(n, w))
             chat_actions.append(act)
         if chat_actions:
-            sep = QAction(menu)
-            sep.setSeparator(True)
-            chat_actions.append(sep)
-        menu.insertActions(first_status, chat_actions)
+            chat_actions.append(separator())
+        menu.insertActions(first_status, chat_actions)  # top of the menu
         tray.setIcon(badge_icon if unread else plain_icon)
         tray.setToolTip(f"Steam Status — {len(unread)} unread chat"
                         f"{'' if len(unread) == 1 else 's'}"
