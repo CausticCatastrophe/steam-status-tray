@@ -1,5 +1,5 @@
 pkgname=steam-status-tray
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc="Steam tray icon with Online/Away/Invisible/Offline, recent games, quick links and a fix for hidden chat windows"
 arch=('any')

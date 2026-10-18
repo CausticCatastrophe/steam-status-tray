@@ -539,13 +539,11 @@ def main():
     sync_status()
     menu.aboutToShow.connect(sync_status)
 
-    first_link = None
     for group in GROUPS:
         menu.addSeparator()
         for name, url in group:
-            act = menu.addAction(name)
-            act.triggered.connect(lambda _, u=url: steam(u))
-            first_link = first_link or act
+            menu.addAction(name).triggered.connect(
+                lambda _, u=url: steam(u))
 
     menu.addSeparator()
     menu.addAction("Exit Steam").triggered.connect(
@@ -564,7 +562,7 @@ def main():
         sep.setSeparator(True)
         return sep
 
-    # Recently played games, between the statuses and the links
+    # Recently played games, between unread chats and the statuses
     game_actions = []
 
     def sync_games():
@@ -577,7 +575,7 @@ def main():
             game_actions.append(act)
         if game_actions:
             game_actions.append(separator())
-        menu.insertActions(first_link, game_actions)
+        menu.insertActions(first_status, game_actions)
 
     menu.aboutToShow.connect(sync_games)
 
@@ -603,7 +601,9 @@ def main():
             chat_actions.append(act)
         if chat_actions:
             chat_actions.append(separator())
-        menu.insertActions(first_status, chat_actions)  # top of the menu
+        # Top of the menu: above the games (if any), else above statuses
+        anchor = game_actions[0] if game_actions else first_status
+        menu.insertActions(anchor, chat_actions)
         tray.setIcon(badge_icon if unread else plain_icon)
         tray.setToolTip(f"Steam Status — {len(unread)} unread chat"
                         f"{'' if len(unread) == 1 else 's'}"

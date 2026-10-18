@@ -10,12 +10,12 @@ also fixes missed chat messages (see below).
 ```
 💬 Friend who messaged you
 ─────────────
+🎮 Your 5 most recently played games
+─────────────
 ● Online
 ○ Away
 ○ Invisible
 ○ Offline
-─────────────
-🎮 Your 5 most recently played games
 ─────────────
 Store
 Library
